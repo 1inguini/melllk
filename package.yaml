@@ -1,5 +1,5 @@
 name:                melllk
-version:             0.1.0.0
+version:             0.1
 github:              "githubuser/melllk"
 license:             BSD3
 author:              "linguini"
@@ -17,7 +17,7 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/melllk#readme>
+description:         Please see the README on GitHub at <https://github.com/1inguini/melllk#readme>
 
 dependencies:
 - base >= 4.7 && < 5
@@ -27,6 +27,16 @@ dependencies:
 - mtl
 - megaparsec
 - pretty-simple
+- haskeline
+- llvm-hs-pure
+- llvm-hs
+- bytestring
+
+# default-extentions:
+# - DuplicateRecordFields
+# - GeneralizedNewtypeDeriving
+# - OverloadedLabels
+# - OverloadedStrings
 
 library:
   source-dirs: src
