@@ -45,15 +45,14 @@ type Names = Map.Map AST.Name Integer
 
 data Code
   = Code
-  { -- currentBlock :: AST.Name
-    -- -- Name of the active block to append to
-  -- ,
-  blocks        :: Map.Map AST.Name Block
-    -- Blocks for function
+  { basicBlocks :: [AST.BasicBlock]
+    -- Basicblocks for Module
+  , namedInstrs :: [AST.Named AST.Instruction]
+    -- Instructions for BasicBlocks
+  -- , blockTerm   :: AST.Named AST.Terminator
+    -- Terminater for BasicBlocks
   , symboltable :: SymbolTable
     -- Function scope symbol table
-  , blockCount  :: Integer
-    -- Count of basic blocks
   , instrCount  :: Word
     -- Count of unnamed instructions
   , names       :: Names
@@ -62,10 +61,10 @@ data Code
 
 emptyCode :: Code
 emptyCode = Code
-  { blocks      = Map.singleton entryBlockName
-                  emptyBlock
+  { basicBlocks = []
+  , namedInstrs = []
+  -- , blockTerm = AST.Do $ AST.Ret Nothing []
   , symboltable = Map.empty
-  , blockCount  = 1
   , instrCount  = 0
   , names       = Map.empty}
 
@@ -79,21 +78,47 @@ unpackName :: AST.Name -> BStr.S.ShortByteString
 unpackName (AST.Name name)   = name
 unpackName (AST.UnName name) = Str.fromString $ show name
 
-data Block
-  = Block
-  { index :: Integer
-    -- Block index
-  , stack :: [AST.Named AST.Instruction]
-    -- Stack of instructions
-  , term  :: Maybe (AST.Named AST.Terminator)
-    -- Block terminator
-  } deriving Show
+-- data Block
+--   = Block
+--   { index :: Integer
+--     -- Block index
+--   , stack :: [AST.Named AST.Instruction]
+--     -- Stack of instructions
+--   , term  :: Maybe (AST.Named AST.Terminator)
+--     -- Block terminator
+--   } deriving Show
 
-emptyBlock :: Block
-emptyBlock = Block { index = 0
-                   , stack = []
-                   , term = Nothing
-                   }
+-- emptyBlock :: Block
+-- emptyBlock = Block { index = 0
+--                    , stack = []
+--                    , term = Nothing
+--                    }
+
+basicBlockName :: AST.BasicBlock -> AST.Name
+basicBlockName (AST.BasicBlock name _ _) = name
+
+renameBBlock :: AST.Name -> AST.BasicBlock -> AST.BasicBlock
+renameBBlock name (AST.BasicBlock _ body term) =
+  AST.BasicBlock name body term
+
+basicBlockBody :: AST.BasicBlock -> [AST.Named AST.Instruction]
+basicBlockBody (AST.BasicBlock _ body _) = body
+
+replacebodyBBlock :: [AST.Named AST.Instruction]
+                  -> AST.BasicBlock
+                  -> AST.BasicBlock
+replacebodyBBlock body (AST.BasicBlock name _ term) =
+  AST.BasicBlock name body term
+
+appendInstr2BBlock :: AST.Named AST.Instruction
+                   -> AST.BasicBlock
+                   -> AST.BasicBlock
+appendInstr2BBlock body bblock =
+  replacebodyBBlock (body : basicBlockBody bblock) bblock
+
+basicBlockTerm :: AST.BasicBlock -> AST.Named AST.Terminator
+basicBlockTerm (AST.BasicBlock _ _ term) = term
+
 
 double :: AST.Type
 double = AST.FloatingPointType AST.DoubleFP
