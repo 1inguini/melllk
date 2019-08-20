@@ -2,4 +2,4 @@
 
 ME Learning LLvm by writing Kaleidoscope with haskell
 
-読みは「メラク」
+読みは「ミルク」もしくは「メラク」
