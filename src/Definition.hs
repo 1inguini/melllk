@@ -24,7 +24,7 @@ data Expr
   | Var      AST.Name
   | FuncCall AST.Name [Expr]
   | FuncDef  AST.Name [AST.Name] Expr
-  | Extern   AST.Name [Expr]
+  | Extern   AST.Name [AST.Name]
   deriving (Eq, Ord, Show)
 
 data Op = Plus
@@ -39,7 +39,7 @@ reserved = [ "def", "extern" ]
 
 -- for LLVMGen
 
-type SymbolTable = Map.Map T.Text AST.Operand
+type SymbolTable = Map.Map AST.Name AST.Operand
 
 type Names = Map.Map AST.Name Integer
 

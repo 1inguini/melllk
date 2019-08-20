@@ -70,7 +70,7 @@ pFactor = MP.choice [ pExtern
 pFuncDef, pExtern, pFuncCall, pVar, pExpr, pAdd, pMul, pFloat, pInteger :: Parser Expr
 pExtern = symbol "extern" >>
           Extern <$> name
-          <*> parens (MP.many pVar)
+          <*> parens (MP.many name)
 
 pFuncDef = symbol "def" >>
            FuncDef <$> name

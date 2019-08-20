@@ -38,23 +38,23 @@ eval input =
   (\expr -> Gen.genLLVM $ St.execState (mapM Gen.codegenTop expr) AST.defaultModule)
   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
--- main :: IO ()
--- main = Hline.runInputT Hline.defaultSettings loop
---   where
---   loop = do
---     minput <- Hline.getInputLine "ready >> "
---     case minput of
---       Nothing    -> Hline.outputStrLn "Goodbye."
---       Just input -> do
---         code <- Trans.liftIO $ eval $ T.pack input
---         Trans.liftIO $ BStr.putStrLn code
---         loop
-
 main :: IO ()
-main = do
-    input <- Safe.headDef "" <$> Env.getArgs
-    code <- eval $ T.pack input
-    BStr.putStrLn code
+main = Hline.runInputT Hline.defaultSettings loop
+  where
+  loop = do
+    minput <- Hline.getInputLine "ready >> "
+    case minput of
+      Nothing    -> Hline.outputStrLn "Goodbye."
+      Just input -> do
+        code <- Trans.liftIO $ eval $ T.pack input
+        Trans.liftIO $ BStr.putStrLn code
+        loop
+
+-- main :: IO ()
+-- main = do
+--     input <- Safe.headDef "" <$> Env.getArgs
+--     code <- eval $ T.pack input
+--     BStr.putStrLn code
 
 
 -- int :: AST.Type

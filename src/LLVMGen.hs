@@ -50,11 +50,11 @@ define retT funcName typedArgs body =
                        , G.basicBlocks = body
                        }
 
-external ::  AST.Type -> T.Text -> [(AST.Type, AST.Name)]
+external ::  AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
          -> St.State AST.Module ()
 external retT funcName argtys =
   appendDefn $ AST.GlobalDefinition
-  G.functionDefaults { G.name        =  genName funcName
+  G.functionDefaults { G.name        = funcName
                      , G.parameters  = (genParam <$> argtys, False)
                      , G.returnType  = retT
                      , G.basicBlocks = []
@@ -84,11 +84,11 @@ localVar = AST.LocalReference Def.double
 externf :: AST.Name -> AST.Operand
 externf = AST.ConstantOperand . Const.GlobalReference Def.double
 
-assign :: T.Text -> AST.Operand -> St.State Code ()
+assign :: AST.Name -> AST.Operand -> St.State Code ()
 assign var operand =
   St.modify $ \s -> s { symboltable = Map.insert var operand $ symboltable s }
 
-getvar :: T.Text -> St.State Code (Either T.Text AST.Operand)
+getvar :: AST.Name -> St.State Code (Either T.Text AST.Operand)
 getvar var = do
   Code { symboltable = symboltable } <- St.get
   maybe (pure . Left $ "Local variable not in scope: " <> tShow var) (pure . Right)
@@ -157,25 +157,22 @@ termCondbr :: AST.Operand -> AST.Name -> AST.Name -> Named AST.Terminator
 termCondbr cond tr fl = AST.Do $ AST.CondBr cond tr fl []
 
 codegenTop :: Expr -> St.State AST.Module ()
--- codegenTop (FuncDef name args body) =
---   either
---   (\err -> do St.modify id; pure err)
---   (define Def.double name fnargs)
---   ethrBasicBlocks
---   where
---     fnargs = toSig args
---     ethrBasicBlocks = createBlocks $ execCode $ do
---       entry <- addBlock entryBlockName
---       setBlock entry
---       (\a -> do
---           var <- alloca Def.double Nothing 0
---           store var 0 (local (genName a))
---           assign a var) <$> args
---       cgen body >>= ret
+codegenTop (FuncDef name args body) =
+  define double name fnargs [blocks]
+  where
+    fnargs = toSig args
+    blocks = evalCode $ do
+      mapM_ (\a -> do
+                var <- alloca Def.double
+                store var (localVar a)
+                assign a var) args
+      genTerm <- cgen body
+      Code {namedInstrs = namedInstrs} <- St.get
+      newBlock name namedInstrs (termRet (Just genTerm))
 
--- -- codegenTop (Extern name args) = do
--- --   external Def.double name fnargs
--- --   where fnargs = toSig args
+codegenTop (Extern name args) = do
+  external Def.double name fnargs
+  where fnargs = toSig args
 
 codegenTop expr =
   define Def.double "main" [] [blocks]
@@ -184,16 +181,6 @@ codegenTop expr =
         genTerm <- cgen expr
         Code {namedInstrs = namedInstrs} <- St.get
         newBlock (genName "main") namedInstrs (termRet (Just genTerm))
-
-          -- (genTerm)
--- codegenTop exp = do
---   define double "main" [] blks
---   where
---     blks = createBlocks $ execCodegen $ do
---       entry <- addBlock entryBlockName
---       setBlock entry
---       cgen exp >>= ret
-
 
 execCode :: St.State Code a -> Code
 execCode m = St.execState m emptyCode
@@ -220,8 +207,8 @@ runCode m = St.runState m emptyCode
 --         maketerm (Just x) = Right x
 --         maketerm Nothing  = Left $ "Block has no terminator: " <> tShow l
 
--- toSig :: [AST.Name] -> [(AST.Type, AST.Name)]
--- toSig = map ((,) Def.double)
+toSig :: [AST.Name] -> [(AST.Type, AST.Name)]
+toSig = map ((,) Def.double)
 
 cgen :: Expr -> St.State Code AST.Operand
 cgen (Float float) =
