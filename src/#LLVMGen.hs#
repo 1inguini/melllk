@@ -133,8 +133,7 @@ appendNamedInstr :: AST.Instruction -> St.State Code AST.Operand
 appendNamedInstr instr = do
   Code { instrCount = instrCount } <- St.get
   let refrence = AST.UnName $ instrCount + 1
-  St.modify $ \code -> code { namedInstrs = namedInstrs code ++ [refrence := instr]
-                            , instrCount = instrCount + 1 }
+  St.modify $ \code -> code { namedInstrs = namedInstrs code ++ [refrence := instr] }
   pure $ localVar refrence
 
 call :: AST.Operand -> [AST.Operand] -> St.State Code AST.Operand
@@ -221,9 +220,7 @@ cgen (Float float) =
 cgen (BinOp op a b) =
   case Map.lookup op binops of
     Just func -> do
-      ca <- cgen a
-      cb <- cgen b
-      func ca cb
+      func =<< cgen a =<< cgen b
     Nothing -> error $ "No such operator" ++ show op
 
 binops = Map.fromList [ (Plus, fadd)

@@ -31,11 +31,18 @@ import qualified LLVM.AST.Type             as Type
 import qualified LLVM.Context              as Context
 import qualified LLVM.Prelude              as LP
 
+-- eval :: T.Text -> IO BStr.ByteString
+-- eval input =
+--   either
+--   (\err -> pure $ Str.fromString . MP.E.errorBundlePretty $ err)
+--   (\expr -> Gen.genLLVM $ St.execState (mapM Gen.codegenTop expr) AST.defaultModule)
+--   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
+
 eval :: T.Text -> IO BStr.ByteString
 eval input =
   either
   (\err -> pure $ Str.fromString . MP.E.errorBundlePretty $ err)
-  (\expr -> Gen.genLLVM $ St.execState (mapM Gen.codegenTop expr) AST.defaultModule)
+  (pure . Str.fromString . T.Lazy.unpack . PrettyS.pShow)
   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
 main :: IO ()

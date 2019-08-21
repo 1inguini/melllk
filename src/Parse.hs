@@ -16,6 +16,8 @@ import qualified Text.Megaparsec.Char.Lexer as MP.L
 import qualified Text.Megaparsec.Debug      as MP.Debug
 import qualified Text.Megaparsec.Error      as MP.E
 
+import qualified LLVM.AST                   as AST
+
 spaceConsumer :: Parser ()
 spaceConsumer = MP.L.space
                 MP.Ch.space1
@@ -23,7 +25,7 @@ spaceConsumer = MP.L.space
                 (MP.L.skipBlockComment "/*" "*/")
 
 symbol :: T.Text -> Parser T.Text
-symbol = MP.L.symbol spaceConsumer
+symbol = MP.try . MP.L.symbol spaceConsumer
 
 lexeme :: Parser a -> Parser a
 lexeme = MP.try . MP.L.lexeme spaceConsumer
@@ -56,10 +58,11 @@ identifier = lexeme $
               then fail $ "keyword " <> show x <> " cannot be an identifier"
               else pure x
 
+name :: Parser AST.Name
 name = genName <$> identifier
 
 pToplevel :: Parser [Expr]
-pToplevel = MP.many $ pFactor <* semicolon
+pToplevel = MP.many $ spaceConsumer *> pFactor <* semicolon
 
 pFactor :: Parser Expr
 pFactor = MP.choice [ pExtern
@@ -77,27 +80,37 @@ pFuncDef = symbol "def" >>
            <*> parens (MP.many name)
            <*> pExpr
 
-pFuncCall = MP.try $ FuncCall
+pFuncCall = FuncCall
             <$> name
             <*> parens (pExpr `MP.sepBy` comma)
 
 pExpr = pAdd
 
+-- pAdd = do
+--   arg0 <- pMul
+--   MP.option arg0 (BinOp
+--                   <$> MP.choice [ Plus  <$ symbol "+"
+--                                 , Minus <$ symbol "-"]
+--                   <*> pure arg0
+--                   <*> pMul)
+
 pAdd = do
-  arg0 <- pMul
-  MP.option arg0 (BinOp
-                  <$> MP.choice [ Plus  <$ symbol "+"
-                                , Minus <$ symbol "-"]
-                  <*> pure arg0
-                  <*> pAdd)
+  fstArg <- pMul
+  argAndOps <- MP.many $ MP.try $
+               (\op rightArg pointFreeLeftArg -> BinOp op pointFreeLeftArg rightArg)
+               <$> MP.choice [ Plus  <$ symbol "+"
+                             , Minus <$ symbol "-"]
+               <*> pMul
+  pure $ foldr (flip (.)) id argAndOps fstArg
 
 pMul = do
-  arg0 <- pTerm
-  MP.option arg0 (BinOp
-                  <$> MP.choice [ Times  <$ symbol "*"
-                                , Divide <$ symbol "/"]
-                  <*> pure arg0
-                  <*> pMul)
+  fstArg <- pTerm
+  argAndOps <- MP.many $ MP.try $
+               (\op rightArg pointFreeLeftArg -> BinOp op pointFreeLeftArg rightArg)
+               <$> MP.choice [ Times  <$ symbol "*"
+                             , Divide <$ symbol "/"]
+               <*> pTerm
+  pure $ foldr (flip (.)) id argAndOps fstArg
 
 pTerm :: Parser Expr
 pTerm = MP.choice [ pVar
