@@ -86,14 +86,6 @@ pFuncCall = FuncCall
 
 pExpr = pAdd
 
--- pAdd = do
---   arg0 <- pMul
---   MP.option arg0 (BinOp
---                   <$> MP.choice [ Plus  <$ symbol "+"
---                                 , Minus <$ symbol "-"]
---                   <*> pure arg0
---                   <*> pMul)
-
 pAdd = do
   fstArg <- pMul
   argAndOps <- MP.many $ MP.try $

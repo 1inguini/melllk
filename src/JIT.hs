@@ -1,14 +1,12 @@
--- imports and their aliases to copy paste
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels      #-}
 {-# LANGUAGE OverloadedStrings     #-}
 
-module ImportRules where
+module JIT where
 
-
+import qualified Control.Exception               as Exception
 import           Control.Monad                   ((<=<), (>=>))
 import qualified Control.Monad                   as M
-import qualified Control.Monad.Except            as Except
 import qualified Control.Monad.State             as St
 import qualified Control.Monad.Trans             as Trans
 
@@ -51,4 +49,17 @@ import qualified LLVM.AST.Type                   as Type
 import qualified LLVM
 import qualified LLVM.Context                    as Context
 import qualified LLVM.Exception                  as Exception
+import qualified LLVM.PassManager                as PassMng
 import qualified LLVM.Target                     as Target
+
+runJIT :: AST.Module -> IO ()
+runJIT module_ = (Context.withContext $ \context -> do
+  Target.initializeAllTargets
+  LLVM.withModuleFromAST context module_ $ \module_ ->
+      PassMng.withPassManager passes $ \passManager -> do
+        _ <- PassMng.runPassManager passManager module_
+        LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn)
+  `Exception.catch` (\err -> PrettyS.pPrint (err :: Exception.EncodeException))
+
+passes :: PassMng.PassSetSpec
+passes = PassMng.defaultCuratedPassSetSpec { PassMng.optLevel = Just 3 }

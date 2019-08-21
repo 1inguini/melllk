@@ -5,14 +5,17 @@
 module Main where
 
 import           Definition
+import qualified JIT
 import qualified LLVMGen                   as Gen
 import qualified Parse
 
 import qualified Control.Monad.State       as St
 import qualified Control.Monad.Trans       as Trans
 import qualified Data.ByteString.Char8     as BStr
+import qualified Data.Either               as E
 import qualified Data.String               as Str
 import qualified Data.Text                 as T
+import qualified Data.Text.IO              as T.IO
 import qualified Data.Text.Lazy            as T.Lazy
 import qualified Safe
 import qualified System.Console.Haskeline  as Hline
@@ -35,15 +38,28 @@ import qualified LLVM.Prelude              as LP
 -- eval input =
 --   either
 --   (\err -> pure $ Str.fromString . MP.E.errorBundlePretty $ err)
---   (\expr -> Gen.genLLVM $ St.execState (mapM Gen.codegenTop expr) AST.defaultModule)
+--   (\expr -> E.either (pure . Str.fromString . T.unpack) Gen.genLLVM
+--             $ St.execStateT (Gen.codegenTop expr) AST.defaultModule)
 --   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
-eval :: T.Text -> IO BStr.ByteString
-eval input =
-  either
-  (\err -> pure $ Str.fromString . MP.E.errorBundlePretty $ err)
-  (pure . Str.fromString . T.Lazy.unpack . PrettyS.pShow)
-  $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
+-- eval :: T.Text -> IO BStr.ByteString
+-- eval input =
+--   either
+--   (\err -> pure $ Str.fromString . MP.E.errorBundlePretty $ err)
+--   (pure . Str.fromString . T.Lazy.unpack . PrettyS.pShow)
+--   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
+
+-- main :: IO ()
+-- main = Hline.runInputT Hline.defaultSettings loop
+--   where
+--   loop = do
+--     minput <- Hline.getInputLine "ready >> "
+--     case minput of
+--       Nothing    -> Hline.outputStrLn "Goodbye."
+--       Just input -> do
+--         code <- Trans.liftIO $ eval $ T.pack input
+--         Trans.liftIO $ BStr.putStrLn code
+--         loop
 
 main :: IO ()
 main = Hline.runInputT Hline.defaultSettings loop
@@ -53,15 +69,15 @@ main = Hline.runInputT Hline.defaultSettings loop
     case minput of
       Nothing    -> Hline.outputStrLn "Goodbye."
       Just input -> do
-        code <- Trans.liftIO $ eval $ T.pack input
-        Trans.liftIO $ BStr.putStrLn code
+        Trans.liftIO $ eval $ T.pack input
         loop
 
--- main :: IO ()
--- main = do
---     input <- Safe.headDef "" <$> Env.getArgs
---     code <- eval $ T.pack input
---     BStr.putStrLn code
+eval :: T.Text -> IO ()
+eval input =
+  either (putStrLn . MP.E.errorBundlePretty)
+  (\expr -> E.either T.IO.putStrLn JIT.runJIT
+            $ St.execStateT (Gen.codegenTop expr) AST.defaultModule)
+  $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
 
 -- int :: AST.Type

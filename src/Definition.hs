@@ -4,6 +4,7 @@
 
 module Definition where
 
+import qualified Control.Monad.State   as St
 import qualified Data.ByteString.Short as BStr.S
 import qualified Data.Map              as Map
 import qualified Data.String           as Str
@@ -31,6 +32,7 @@ data Op = Plus
         | Minus
         | Times
         | Divide
+        | LsT
         deriving (Eq, Ord, Show)
 
 reserved :: [T.Text]
@@ -59,6 +61,15 @@ data Code
     -- Name Supply
   } deriving Show
 
+execCode :: StateWithErr Code a -> Either T.Text Code
+execCode m = St.execStateT m emptyCode
+
+evalCode :: StateWithErr Code a -> Either T.Text a
+evalCode m = St.evalStateT m emptyCode
+
+runCode :: StateWithErr Code a -> Either T.Text (a, Code)
+runCode m = St.runStateT m emptyCode
+
 emptyCode :: Code
 emptyCode = Code
   { basicBlocks = []
@@ -78,21 +89,10 @@ unpackName :: AST.Name -> BStr.S.ShortByteString
 unpackName (AST.Name name)   = name
 unpackName (AST.UnName name) = Str.fromString $ show name
 
--- data Block
---   = Block
---   { index :: Integer
---     -- Block index
---   , stack :: [AST.Named AST.Instruction]
---     -- Stack of instructions
---   , term  :: Maybe (AST.Named AST.Terminator)
---     -- Block terminator
---   } deriving Show
+type StateWithErr a b = St.StateT a (Either T.Text) b
 
--- emptyBlock :: Block
--- emptyBlock = Block { index = 0
---                    , stack = []
---                    , term = Nothing
---                    }
+throwErr :: T.Text -> StateWithErr a b
+throwErr = St.lift . Left
 
 basicBlockName :: AST.BasicBlock -> AST.Name
 basicBlockName (AST.BasicBlock name _ _) = name
