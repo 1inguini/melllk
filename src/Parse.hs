@@ -67,7 +67,6 @@ pToplevel = MP.many $ spaceConsumer *> pFactor <* semicolon
 pFactor :: Parser Expr
 pFactor = MP.choice [ pExtern
                     , pFuncDef
-                    , pFuncCall
                     , pExpr]
 
 pFuncDef, pExtern, pFuncCall, pVar, pExpr, pAdd, pMul, pFloat, pInteger :: Parser Expr
@@ -80,7 +79,7 @@ pFuncDef = symbol "def" >>
            <*> parens (MP.many name)
            <*> pExpr
 
-pFuncCall = FuncCall
+pFuncCall = MP.try $ FuncCall
             <$> name
             <*> parens (pExpr `MP.sepBy` comma)
 
@@ -105,7 +104,8 @@ pMul = do
   pure $ foldr (flip (.)) id argAndOps fstArg
 
 pTerm :: Parser Expr
-pTerm = MP.choice [ pVar
+pTerm = MP.choice [ pFuncCall
+                  , pVar
                   , pFloat
                   , pInteger
                   , parens pExpr]

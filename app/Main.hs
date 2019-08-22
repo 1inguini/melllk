@@ -75,8 +75,8 @@ main = Hline.runInputT Hline.defaultSettings loop
 eval :: T.Text -> IO ()
 eval input =
   either (putStrLn . MP.E.errorBundlePretty)
-  (\expr -> E.either T.IO.putStrLn JIT.runJIT
-            $ St.execStateT (Gen.codegenTop expr) AST.defaultModule)
+  (\exprs -> E.either T.IO.putStrLn JIT.runJIT
+            $ St.evalStateT (Gen.codegenTop exprs) emptyMetaData)
   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
 

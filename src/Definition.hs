@@ -43,41 +43,40 @@ reserved = [ "def", "extern" ]
 
 type SymbolTable = Map.Map AST.Name AST.Operand
 
+type DefinitionTable = Map.Map AST.Name AST.Definition
+
 type Names = Map.Map AST.Name Integer
 
-data Code
-  = Code
-  { basicBlocks :: [AST.BasicBlock]
-    -- Basicblocks for Module
-  , namedInstrs :: [AST.Named AST.Instruction]
+data MetaData
+  = MetaData
+  { namedInstrs     :: [AST.Named AST.Instruction]
     -- Instructions for BasicBlocks
-  -- , blockTerm   :: AST.Named AST.Terminator
-    -- Terminater for BasicBlocks
-  , symboltable :: SymbolTable
+  , symbolTable     :: SymbolTable
     -- Function scope symbol table
-  , instrCount  :: Word
+  , definitionTable :: DefinitionTable
+    -- Global scope symbol table
+  , instrCount      :: Word
     -- Count of unnamed instructions
-  , names       :: Names
+  , names           :: Names
     -- Name Supply
   } deriving Show
 
-execCode :: StateWithErr Code a -> Either T.Text Code
-execCode m = St.execStateT m emptyCode
+execMetaData :: StateWithErr MetaData a -> Either T.Text MetaData
+execMetaData m = St.execStateT m emptyMetaData
 
-evalCode :: StateWithErr Code a -> Either T.Text a
-evalCode m = St.evalStateT m emptyCode
+evalMetaData :: StateWithErr MetaData a -> Either T.Text a
+evalMetaData m = St.evalStateT m emptyMetaData
 
-runCode :: StateWithErr Code a -> Either T.Text (a, Code)
-runCode m = St.runStateT m emptyCode
+runMetaData :: StateWithErr MetaData a -> Either T.Text (a, MetaData)
+runMetaData m = St.runStateT m emptyMetaData
 
-emptyCode :: Code
-emptyCode = Code
-  { basicBlocks = []
-  , namedInstrs = []
-  -- , blockTerm = AST.Do $ AST.Ret Nothing []
-  , symboltable = Map.empty
-  , instrCount  = 0
-  , names       = Map.empty}
+emptyMetaData :: MetaData
+emptyMetaData = MetaData
+  { namedInstrs     = []
+  , symbolTable     = Map.empty
+  , definitionTable = Map.empty
+  , instrCount      = 0
+  , names           = Map.empty}
 
 entryBlockName :: AST.Name
 entryBlockName = genName "entry"

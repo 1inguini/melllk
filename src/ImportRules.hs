@@ -26,6 +26,8 @@ import qualified Data.Text.IO                    as T.IO
 import qualified Data.Text.Lazy                  as T.Lazy
 import qualified Data.Void                       as Void
 
+import qualified Foreign.Ptr                     as Ptr
+
 import qualified Safe
 
 import qualified System.Console.Haskeline        as Hline
@@ -40,6 +42,7 @@ import qualified Text.Pretty.Simple              as PrettyS
 
 import           LLVM.AST                        (Named ((:=)))
 import qualified LLVM.AST                        as AST
+import qualified LLVM.AST.AddrSpace              as AddrSpace
 import qualified LLVM.AST.CallingConvention      as CallC
 import qualified LLVM.AST.Constant               as Const
 import qualified LLVM.AST.Float                  as Float
@@ -49,6 +52,8 @@ import qualified LLVM.AST.IntegerPredicate       as IP
 import qualified LLVM.AST.Type                   as Type
 
 import qualified LLVM
+import qualified LLVM.Analysis                   as Analysis
 import qualified LLVM.Context                    as Context
 import qualified LLVM.Exception                  as Exception
+import qualified LLVM.ExecutionEngine            as ExecEngine
 import qualified LLVM.Target                     as Target

@@ -22,18 +22,11 @@ import qualified Data.String                     as Str
 import qualified Data.Text                       as T
 import qualified Data.Text.IO                    as T.IO
 import qualified Data.Text.Lazy                  as T.Lazy
-import qualified Data.Void                       as Void
+
+import qualified Foreign.Ptr                     as Ptr
 
 import qualified Safe
 
-import qualified System.Console.Haskeline        as Hline
-import qualified System.Environment              as Env
-
-import qualified Text.Megaparsec                 as MP
-import qualified Text.Megaparsec.Char            as MP.Ch
-import qualified Text.Megaparsec.Char.Lexer      as MP.L
-import qualified Text.Megaparsec.Debug           as MP.Debug
-import qualified Text.Megaparsec.Error           as MP.E
 import qualified Text.Pretty.Simple              as PrettyS
 
 import           LLVM.AST                        (Named ((:=)))
@@ -47,20 +40,44 @@ import qualified LLVM.AST.IntegerPredicate       as IP
 import qualified LLVM.AST.Type                   as Type
 
 import qualified LLVM
+import qualified LLVM.Analysis                   as Analysis
 import qualified LLVM.Context                    as Context
 import qualified LLVM.Exception                  as Exception
+import qualified LLVM.ExecutionEngine            as ExecEngine
 import qualified LLVM.PassManager                as PassMng
 import qualified LLVM.Target                     as Target
 
 runJIT :: AST.Module -> IO ()
-runJIT module_ = Context.withContext (\context -> do
+runJIT module_ = Context.withContext
+  (\context -> jit context $ \executionEngine -> do
   Target.initializeAllTargets
   LLVM.withModuleFromAST context module_ $ \module_ ->
       PassMng.withPassManager passes $ \passManager -> do
         _ <- PassMng.runPassManager passManager module_
-        LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn)
+        Analysis.verify module_
+        LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
+        ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do
+          mainfn <- ExecEngine.getFunction ee (AST.Name "main")
+          case mainfn of
+            Just fn -> do
+              res <- run fn
+              putStrLn $ ">>> Evaluated to: " ++ show res
+            Nothing -> return ())
   `Exception.catch` (\(Exception.EncodeException err) ->
                        T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err)
 
 passes :: PassMng.PassSetSpec
 passes = PassMng.defaultCuratedPassSetSpec { PassMng.optLevel = Just 3 }
+
+jit :: Context.Context -> (ExecEngine.MCJIT -> IO a) -> IO a
+jit context = ExecEngine.withMCJIT context optlevel model ptrElim fastInstr
+  where
+    optlevel   = Just 2  -- optimization level
+    model      = Nothing -- code model ( Default )
+    ptrElim    = Nothing -- frame pointer elimination
+    fastInstr  = Nothing -- fast instruction selection
+
+foreign import ccall "dynamic" haskFun :: Ptr.FunPtr (IO Double) -> (IO Double)
+
+run :: Ptr.FunPtr a -> IO Double
+run fn = haskFun (Ptr.castFunPtr fn :: Ptr.FunPtr (IO Double))
