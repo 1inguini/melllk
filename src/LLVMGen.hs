@@ -138,8 +138,12 @@ call fn args = appendNamedInstr $
 alloca :: AST.Type -> StateWithErr Code AST.Operand
 alloca type_ = appendNamedInstr $ AST.Alloca type_ Nothing 0 []
 
-store :: AST.Operand -> AST.Operand -> StateWithErr Code AST.Operand
-store addr val = appendNamedInstr $ AST.Store False addr val Nothing 0 []
+store :: AST.Operand -> AST.Operand -> StateWithErr Code ()
+store addr val = appendNoNameInstr $ AST.Store False addr val Nothing 0 []
+
+appendNoNameInstr :: AST.Instruction -> StateWithErr Code ()
+appendNoNameInstr instr = do
+  St.modify $ \code -> code { namedInstrs = namedInstrs code ++ [AST.Do instr] }
 
 load :: AST.Operand -> StateWithErr Code AST.Operand
 load addr = appendNamedInstr $ AST.Load False addr Nothing 0 []
@@ -161,10 +165,10 @@ expr2module (FuncDef name args body) =
     eitherBlocks = evalCode $ do
       mapM_ (\arg -> do
                 var <- alloca Def.double
-                _   <- store var (localRef arg)
+                store var (localRef arg)
                 assign arg var) args
       genTerm <- cgen body
-      Code {namedInstrs = namedInstrs} <- St.get
+      Code { namedInstrs = namedInstrs } <- St.get
       newBlock name namedInstrs (termRet (Just genTerm))
 
 expr2module (Extern name args) = external Def.double name (toSig args)
@@ -176,7 +180,7 @@ expr2module expr =
     where
       eitherBlocks = evalCode $ do
         genTerm <- cgen expr
-        Code {namedInstrs = namedInstrs} <- St.get
+        Code { namedInstrs = namedInstrs } <- St.get
         newBlock (genName "main") namedInstrs (termRet (Just genTerm))
 
 toSig :: [AST.Name] -> [(AST.Type, AST.Name)]
@@ -188,9 +192,7 @@ codegenTop = mapM_ expr2module
 cgen :: Expr -> StateWithErr Code AST.Operand
 cgen (Float float) = pure . AST.ConstantOperand . Const.Float . Float.Double $ float
 
-cgen (Var x) = do
-  eitherVar <- getvar x
-  load >=> pure $ eitherVar
+cgen (Var x) = getvar x >>= load
 
 cgen (BinOp op leftArg rightArg) =
   May.maybe (throwErr $ "No such operator" <> tShow op)

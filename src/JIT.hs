@@ -53,13 +53,14 @@ import qualified LLVM.PassManager                as PassMng
 import qualified LLVM.Target                     as Target
 
 runJIT :: AST.Module -> IO ()
-runJIT module_ = (Context.withContext $ \context -> do
+runJIT module_ = Context.withContext (\context -> do
   Target.initializeAllTargets
   LLVM.withModuleFromAST context module_ $ \module_ ->
       PassMng.withPassManager passes $ \passManager -> do
         _ <- PassMng.runPassManager passManager module_
         LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn)
-  `Exception.catch` (\err -> PrettyS.pPrint (err :: Exception.EncodeException))
+  `Exception.catch` (\(Exception.EncodeException err) ->
+                       T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err)
 
 passes :: PassMng.PassSetSpec
 passes = PassMng.defaultCuratedPassSetSpec { PassMng.optLevel = Just 3 }
