@@ -32,7 +32,8 @@ import qualified LLVM.AST.Global           as G
 import qualified LLVM.AST.IntegerPredicate as IP
 import qualified LLVM.AST.Type             as Type
 import qualified LLVM.Context              as Context
-import qualified LLVM.Prelude              as LP
+
+import qualified LLVM.IRBuilder            as IR
 
 -- eval :: T.Text -> IO BStr.ByteString
 -- eval input =
@@ -75,8 +76,9 @@ main = Hline.runInputT Hline.defaultSettings loop
 eval :: T.Text -> IO ()
 eval input =
   either (putStrLn . MP.E.errorBundlePretty)
-  (\exprs -> E.either T.IO.putStrLn JIT.runJIT
-            $ St.evalStateT (Gen.codegenTop exprs) emptyMetaData)
+  (\tops -> E.either print
+            (\astModule -> JIT.runJIT $ astModule)
+            $ evalMetaData (Gen.toplevels2module tops))
   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
 
 

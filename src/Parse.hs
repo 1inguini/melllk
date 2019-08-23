@@ -8,6 +8,8 @@ module Parse (
 
 import           Definition
 
+import qualified Data.ByteString.Short      as BStr.S
+import qualified Data.String                as Str
 import qualified Data.Text                  as T
 
 import qualified Text.Megaparsec            as MP
@@ -48,28 +50,29 @@ braces    = MP.between (symbol "{") (symbol "}")
 angles    = MP.between (symbol "<") (symbol ">")
 brackets  = MP.between (symbol "[") (symbol "]")
 
-identifier :: Parser T.Text
+identifier :: Parser SByteStr
 identifier = lexeme $
-  (\x-> T.pack . (x:))
+  (\x-> (Str.fromString :: String -> SByteStr) . (x:))
   <$> MP.Ch.letterChar
   <*> MP.many MP.Ch.alphaNumChar >>= check
   where
-    check x = if x `elem` reserved
+    check x = if x `elem` ((Str.fromString . T.unpack) <$> reserved)
               then fail $ "keyword " <> show x <> " cannot be an identifier"
               else pure x
 
 name :: Parser AST.Name
-name = genName <$> identifier
+name = AST.Name <$> identifier
 
-pToplevel :: Parser [Expr]
+pToplevel :: Parser [Toplevel]
 pToplevel = MP.many $ spaceConsumer *> pFactor <* semicolon
 
-pFactor :: Parser Expr
+pFactor :: Parser Toplevel
 pFactor = MP.choice [ pExtern
                     , pFuncDef
-                    , pExpr]
+                    , pTopExpr]
 
-pFuncDef, pExtern, pFuncCall, pVar, pExpr, pAdd, pMul, pFloat, pInteger :: Parser Expr
+pFuncDef, pExtern, pTopExpr :: Parser Toplevel
+
 pExtern = symbol "extern" >>
           Extern <$> name
           <*> parens (MP.many name)
@@ -83,6 +86,9 @@ pFuncCall = MP.try $ FuncCall
             <$> name
             <*> parens (pExpr `MP.sepBy` comma)
 
+pTopExpr = Expr <$> pExpr
+
+pFuncCall, pVar, pExpr, pAdd, pMul, pFloat, pInteger :: Parser Expr
 pExpr = pAdd
 
 pAdd = do

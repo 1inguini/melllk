@@ -52,19 +52,21 @@ runJIT module_ = Context.withContext
   (\context -> jit context $ \executionEngine -> do
   Target.initializeAllTargets
   LLVM.withModuleFromAST context module_ $ \module_ ->
-      PassMng.withPassManager passes $ \passManager -> do
-        _ <- PassMng.runPassManager passManager module_
-        Analysis.verify module_
-        LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
-        ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do
-          mainfn <- ExecEngine.getFunction ee (AST.Name "main")
-          case mainfn of
-            Just fn -> do
-              res <- run fn
-              putStrLn $ ">>> Evaluated to: " ++ show res
-            Nothing -> return ())
-  `Exception.catch` (\(Exception.EncodeException err) ->
+    PassMng.withPassManager passes $ \passManager -> do
+    Analysis.verify module_
+    _ <- PassMng.runPassManager passManager module_
+    optimizedModule <- LLVM.moduleAST module_
+    LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
+    ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do
+      mainfn <- ExecEngine.getFunction ee (AST.Name "main")
+      case mainfn of
+        Just fn -> do
+          res <- run fn
+          putStrLn $ ">>> Evaluated to: " ++ show res
+        Nothing -> return ())
+  `Exception.catch` (\(Exception.EncodeException err) -> do
                        T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err)
+
 
 passes :: PassMng.PassSetSpec
 passes = PassMng.defaultCuratedPassSetSpec { PassMng.optLevel = Just 3 }

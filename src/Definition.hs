@@ -19,13 +19,17 @@ import qualified LLVM.AST              as AST
 
 type Parser = MP.Parsec Void.Void T.Text
 
+type SByteStr = BStr.S.ShortByteString
+
+data Toplevel = FuncDef  AST.Name [AST.Name] Expr
+              | Extern   AST.Name [AST.Name]
+              | Expr     Expr
+
 data Expr
   = Float    Double
   | BinOp    Op       Expr   Expr
   | Var      AST.Name
   | FuncCall AST.Name [Expr]
-  | FuncDef  AST.Name [AST.Name] Expr
-  | Extern   AST.Name [AST.Name]
   deriving (Eq, Ord, Show)
 
 data Op = Plus
@@ -43,19 +47,21 @@ reserved = [ "def", "extern" ]
 
 type SymbolTable = Map.Map AST.Name AST.Operand
 
-type DefinitionTable = Map.Map AST.Name AST.Definition
+type DefinitionTable = Map.Map AST.Name AST.Operand
 
 type Names = Map.Map AST.Name Integer
 
+type NamedInstrs = [AST.Named AST.Instruction]
+
 data MetaData
   = MetaData
-  { namedInstrs     :: [AST.Named AST.Instruction]
+  { namedInstrs     :: NamedInstrs
     -- Instructions for BasicBlocks
   , symbolTable     :: SymbolTable
     -- Function scope symbol table
   , definitionTable :: DefinitionTable
     -- Global scope symbol table
-  , instrCount      :: Word
+  , unusedNum       :: Word
     -- Count of unnamed instructions
   , names           :: Names
     -- Name Supply
@@ -75,7 +81,7 @@ emptyMetaData = MetaData
   { namedInstrs     = []
   , symbolTable     = Map.empty
   , definitionTable = Map.empty
-  , instrCount      = 0
+  , unusedNum       = 0
   , names           = Map.empty}
 
 entryBlockName :: AST.Name
