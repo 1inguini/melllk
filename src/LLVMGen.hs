@@ -69,9 +69,11 @@ unName = do
 toplevels2module :: [Toplevel] -> StateWithErr MetaData AST.Module
 toplevels2module exprs = do
   maybeDefs <- toplevel2def `mapM` exprs
-  pure $ AST.defaultModule { AST.moduleDefinitions =
-                             May.fromMaybe [] $ (>>= pure) `mapM` maybeDefs}
+  pure $ AST.defaultModule { AST.moduleDefinitions = fromMaybeList [] maybeDefs}
 
+fromMaybeList accm ((Just a):listMay) = a:(fromMaybeList accm listMay)
+fromMaybeList accm (Nothing:listMay)  = (fromMaybeList accm listMay)
+fromMaybeList accm []                 = accm
 
 -- Toplevel to Definition
 
@@ -168,12 +170,24 @@ addToDefinitionTable type' name typedArgs =
   St.modify $ \meta ->
     meta { definitionTable =
            Map.insert name
-           (AST.LocalReference
-            AST.FunctionType { resultType    = type'
-                             , argumentTypes = fst <$> typedArgs
-                             , isVarArg      = False}
+           (AST.ConstantOperand $
+            Const.GlobalReference
+            AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
+                             , pointerReferent =
+                               AST.FunctionType { resultType    = type'
+                                                , argumentTypes = fst <$> typedArgs
+                                                , isVarArg      = False }}
              name)
            $ definitionTable meta}
+  -- St.modify $ \meta ->
+  --   meta { definitionTable =
+  --          Map.insert name
+  --          (AST.LocalReference
+  --           AST.FunctionType { resultType    = type'
+  --                            , argumentTypes = fst <$> typedArgs
+  --                            , isVarArg      = False}
+  --            name)
+  --          $ definitionTable meta}
 
 
 
