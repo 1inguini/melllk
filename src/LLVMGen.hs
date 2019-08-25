@@ -30,6 +30,7 @@ import qualified LLVM.AST.Float                  as Float
 import qualified LLVM.AST.FloatingPointPredicate as FP
 import qualified LLVM.AST.Global                 as G
 import qualified LLVM.AST.IntegerPredicate       as IP
+import qualified LLVM.AST.Linkage                as Linkage
 import qualified LLVM.AST.Type                   as Type
 
 import qualified LLVM
@@ -63,17 +64,30 @@ unName = do
   pure $ AST.UnName unusedNum
 
 
+ptrTo :: AST.Type -> AST.Type
+ptrTo type' = AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
+                              , pointerReferent  = type' }
+
+
+mayThrowErr :: T.Text -> Maybe a -> StateWithErr MetaData a
+mayThrowErr _ (Just a)  = pure a
+mayThrowErr msg Nothing = throwErr msg
+
+
 
 -- Toplevels to Module
 
 toplevels2module :: [Toplevel] -> StateWithErr MetaData AST.Module
 toplevels2module exprs = do
   maybeDefs <- toplevel2def `mapM` exprs
-  pure $ AST.defaultModule { AST.moduleDefinitions = fromMaybeList [] maybeDefs}
+  pure AST.defaultModule { AST.moduleDefinitions = fromMaybeList [] maybeDefs }
 
-fromMaybeList accm ((Just a):listMay) = a:(fromMaybeList accm listMay)
-fromMaybeList accm (Nothing:listMay)  = (fromMaybeList accm listMay)
-fromMaybeList accm []                 = accm
+fromMaybeList :: [a] -> [Maybe a] -> [a]
+fromMaybeList accm (Just a:listMay)  = a:fromMaybeList accm listMay
+fromMaybeList accm (Nothing:listMay) = fromMaybeList accm listMay
+fromMaybeList accm []                = accm
+
+
 
 -- Toplevel to Definition
 
@@ -88,11 +102,20 @@ toplevel2def top = do
 
 toplevel2Global :: Toplevel -> StateWithErr MetaData (Maybe AST.Global)
 toplevel2Global (FuncDef name argNames bodyExpr) = do
-  St.modify $ \meta -> meta { symbolTable = Map.fromList $
-                              (\argName -> (argName, AST.LocalReference double argName))
-                              <$> argNames }
-  body <- exprs2BBlock [bodyExpr]
-  St.modify $ \meta -> meta { symbolTable = Map.empty }
+  name <- mangle name
+  MetaData { symbolTable = oldSymbolTable
+           -- , names       = oldNames
+           } <- St.get
+  -- St.modify $ \meta -> meta { names     = Map.empty
+  --                           , unusedNum = 0 }
+  argNInstrs <- concatMap namedInstrs <$> assign Type.double `mapM` argNames
+  nios       <- expr2nio bodyExpr
+  term       <- termRet $ mayOperand nios
+  blkname    <- mangle (AST.Name "entry")
+  body       <- newBasicBlock blkname (argNInstrs ++ namedInstrs nios) term
+  St.modify $ \meta -> meta { symbolTable = oldSymbolTable
+                            -- , names       = oldNames
+                            }
   defineFunc double name ((,) double <$> argNames) [body]
 
 
@@ -100,49 +123,77 @@ toplevel2Global (Extern name argNames) =
   externFunc double name ((,) double <$> argNames)
 
 toplevel2Global (Expr expr) = do
-  body <- exprs2BBlock [expr]
+  MetaData { symbolTable = oldSymbolTable
+           -- , names       = oldNames
+           } <- St.get
+  nios       <- expr2nio expr
+  term       <- termRet $ mayOperand nios
+  blkname    <- mangle (AST.Name "entry")
+  body       <- newBasicBlock blkname (namedInstrs nios) term
+  St.modify $ \meta -> meta { symbolTable = oldSymbolTable
+                            -- , names       = oldNames
+                            }
   defineFunc double (AST.Name "main") [] [body]
 
 
 
 -- Exprs to Basicblock
 
-exprs2BBlock :: [Expr] -> StateWithErr MetaData AST.BasicBlock
-exprs2BBlock exprs = do
-  term <- termRet =<< Safe.lastMay <$> mapM expr2operand exprs
-  MetaData { namedInstrs = namedInstrs } <- St.get
-  newBasicBlock namedInstrs term
+-- exprs2BBlock :: [Expr] -> StateWithErr MetaData AST.BasicBlock
+-- exprs2BBlock exprs = do
+--   nios    <- expr2nio `mapM` exprs
+--   term    <- termRet $ Safe.lastDef Nothing (mayOperand <$> nios)
+--   blkname <- mangle (AST.Name "entry")
+--   newBasicBlock blkname (concat $ namedInstrs <$> nios) term
 
 
 
--- Expr to Operand while appending namedInstrs
+-- Expr to  Named Instructions and Operand
 
-expr2operand :: Expr -> StateWithErr MetaData AST.Operand
-expr2operand (Float num)   = doubleNum num
-expr2operand (Var varName) = do
+expr2nio :: Expr -> StateWithErr MetaData NInstrsOperand
+expr2nio (Float num)   = do
+  numOp <- doubleNum num
+  pure defNIO { mayOperand = Just numOp }
+
+expr2nio (Var varName) = do
   MetaData { symbolTable = symbolTable } <- St.get
-  May.maybe
-    (throwErr $ "variable not assigned: " <> tShow varName)
-    (\operand -> load double operand)
-    $ symbolTable !? varName
+  mayThrowErr ("variable not assigned: " <> tShow varName)
+    (symbolTable !? varName)
+    >>= load
 
-expr2operand (BinOp op expr0 expr1) = do
-  operand0 <- expr2operand expr0
-  operand1 <- expr2operand expr1
-  case op of
-    Plus   -> fAdd operand0 operand1
-    Minus  -> fSub operand0 operand1
-    Times  -> fMul operand0 operand1
-    Divide -> fDiv operand0 operand1
+expr2nio (BinOp op expr0 expr1) = do
+  NIO { mayOperand  = mayOperand0
+      , namedInstrs = namedInstrs0 } <- expr2nio expr0
+  NIO { mayOperand  = mayOperand1
+      , namedInstrs = namedInstrs1 } <- expr2nio expr1
+  operand0 <- mayThrowErr ("failed at: " <> tShow expr0) mayOperand0
+  operand1 <- mayThrowErr ("failed at: " <> tShow expr0) mayOperand1
+  NIO { mayOperand  = resultOperand
+      , namedInstrs = resultNInstrs
+      } <- (case op of
+               ; Plus   -> fAdd
+               ; Minus  -> fSub
+               ; Times  -> fMul
+               ; Divide -> fDiv
+               ; LsT    -> undefined) operand0 operand1
+  pure defNIO { mayOperand  = resultOperand
+              , namedInstrs = namedInstrs0
+                              ++ namedInstrs1
+                              ++ resultNInstrs }
 
-expr2operand (FuncCall name exprs) = do
-  argOperands <- expr2operand `mapM` exprs
+expr2nio (FuncCall name exprs) = do
+  nios        <- expr2nio `mapM` exprs
+  argOps      <- mayThrowErr ("failed at:" <> tShow exprs) `mapM` (mayOperand <$> nios)
   MetaData { definitionTable = definitionTable } <- St.get
-  May.maybe
-    (throwErr $ "function not defined: " <> tShow name)
-    (\operand -> call operand argOperands)
-    $ definitionTable !? name
-
+  NIO { mayOperand  = retMayOp
+      , namedInstrs = retNInstrs
+      } <- May.maybe
+           (throwErr $ "function not defined: " <> tShow name)
+           (flip (call Type.double) argOps)
+           $ definitionTable !? name
+  pure defNIO { mayOperand  = retMayOp
+              , namedInstrs = concat (namedInstrs <$> nios)
+                              ++ retNInstrs }
 
 
 
@@ -153,16 +204,24 @@ defineFunc :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)] -> [AST.BasicBlock]
 defineFunc type' name typedArgs basicBlocks = do
   addToDefinitionTable type' name typedArgs
   pure . Just $
-    AST.functionDefaults { G.returnType = type'
-                         , G.name = name
-                         , G.parameters = (genParam <$> typedArgs, False)
+    AST.functionDefaults { G.returnType  = type'
+                         , G.name        = name
+                         , G.parameters  = (genParam <$> typedArgs, False)
                          , G.basicBlocks = basicBlocks }
+
 
 externFunc :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
            -> StateWithErr MetaData (Maybe AST.Global)
 externFunc type' name typedArgs = do
   addToDefinitionTable type' name typedArgs
-  pure Nothing
+  pure . Just $
+    AST.functionDefaults
+    { G.linkage    = Linkage.External
+    , G.returnType = type'
+    , G.name       = name
+    , G.parameters = (genParam <$> typedArgs, False)
+    }
+
 
 addToDefinitionTable :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
                      -> StateWithErr MetaData ()
@@ -179,19 +238,6 @@ addToDefinitionTable type' name typedArgs =
                                                 , isVarArg      = False }}
              name)
            $ definitionTable meta}
-  -- St.modify $ \meta ->
-  --   meta { definitionTable =
-  --          Map.insert name
-  --          (AST.LocalReference
-  --           AST.FunctionType { resultType    = type'
-  --                            , argumentTypes = fst <$> typedArgs
-  --                            , isVarArg      = False}
-  --            name)
-  --          $ definitionTable meta}
-
-
-
-
 
 -- Misc (Global)
 
@@ -202,66 +248,71 @@ genParam (type', name) = G.Parameter type' name []
 
 -- Basicblock
 
-newBasicBlock :: [AST.Named AST.Instruction] -> AST.Named AST.Terminator
+newBasicBlock :: AST.Name -> [AST.Named AST.Instruction] -> AST.Named AST.Terminator
            -> StateWithErr MetaData AST.BasicBlock
-newBasicBlock namedInstrs terminator = do
-  meta@MetaData { unusedNum = unusedNum } <- St.get
-  St.put meta { unusedNum = unusedNum + 1 }
-  pure $ AST.BasicBlock (AST.UnName unusedNum) namedInstrs terminator
+newBasicBlock blkname namedInstrs terminator =
+  pure $ AST.BasicBlock blkname namedInstrs terminator
 
 
 
--- append Named Instruction and return Operand
+-- Named Instruction and Operand (NIO)
 
 fAdd, fSub, fMul, fDiv :: AST.Operand -> AST.Operand
-  -> StateWithErr MetaData AST.Operand
+  -> StateWithErr MetaData NInstrsOperand
 fAdd = fOps AST.FAdd
 fSub = fOps AST.FSub
 fMul = fOps AST.FMul
 fDiv = fOps AST.FDiv
 
-call :: AST.Operand -> [AST.Operand] -> StateWithErr MetaData AST.Operand
-call fn args = do
+
+call :: AST.Type -> AST.Operand -> [AST.Operand] -> StateWithErr MetaData NInstrsOperand
+call type' fn args = do
   name <- unName
-  St.modify $ \meta ->
-    meta { namedInstrs = namedInstrs meta ++
-           [name := AST.Call Nothing CallC.C [] (Right fn) ((\x -> (x, [])) <$> args) [] []] }
-  pure $ AST.LocalReference double name
+  pure defNIO { mayOperand = Just $ AST.LocalReference type' name
+              , namedInstrs =
+                [name := AST.Call Nothing CallC.C [] (Right fn) ((\x -> (x, [])) <$> args) [] []] }
 
-alloca :: AST.Type -> Maybe AST.Name -> StateWithErr MetaData AST.Operand
-alloca type' (Just name) = mangle name >>= alloca' type'
-alloca type' Nothing     = unName >>= alloca' type'
-
-load :: AST.Type -> AST.Operand -> StateWithErr MetaData AST.Operand
-load type' addr = do
+alloca :: AST.Type -> StateWithErr MetaData NInstrsOperand
+alloca type' = do
   name <- unName
-  let dest = AST.LocalReference type' name
-  St.modify $ \meta -> meta { namedInstrs = namedInstrs meta ++
-                              [name := AST.Load False addr Nothing 0 []] }
-  pure dest
+  pure defNIO { mayOperand  = Just $ AST.LocalReference (ptrTo type') name
+              , namedInstrs = [name := AST.Alloca type' Nothing 0 []] }
 
 
-store :: AST.Operand -> AST.Operand -> StateWithErr MetaData ()
-store addr val = St.modify $ \meta ->
-    meta { namedInstrs = namedInstrs meta ++
-           [AST.Do $ AST.Store False addr val Nothing 0 []] }
+store :: AST.Operand -> AST.Operand -> StateWithErr MetaData NInstrsOperand
+store addr val =
+  pure defNIO { namedInstrs = [AST.Do $ AST.Store False addr val Nothing 0 []] }
 
 
-alloca' :: AST.Type -> AST.Name -> StateWithErr MetaData AST.Operand
-alloca' type' name = do
-  St.modify $ \meta -> meta { namedInstrs = namedInstrs meta ++
-                              [name := AST.Alloca type' Nothing 0 []] }
-  pure $ AST.LocalReference type' name
+load :: AST.Operand -> StateWithErr MetaData NInstrsOperand
+load addr@(AST.LocalReference AST.PointerType { pointerReferent = type' } _) = do
+  name <- unName
+  pure defNIO { mayOperand = Just $ AST.LocalReference type' name
+              , namedInstrs = [name := AST.Load False addr Nothing 0 []]}
+load operand = throwErr ("Cannot load non-pointer (Malformed AST): " <> tShow operand)
+
+
+assign :: AST.Type -> AST.Name -> StateWithErr MetaData NInstrsOperand
+assign type' name = do
+  NIO { namedInstrs = allocaNInstrs
+      , mayOperand  = mayAllocaOp
+      }  <- alloca type'
+  addrOp <- mayThrowErr ("failed at assigning (alloca): " <> tShow name) mayAllocaOp
+  NIO { namedInstrs = storeNInstrs
+      }  <- store addrOp (AST.LocalReference type' name)
+  St.modify $ \meta -> meta { symbolTable = Map.insert name addrOp $ symbolTable meta }
+  pure defNIO { mayOperand  = mayAllocaOp
+              , namedInstrs = allocaNInstrs ++ storeNInstrs }
+
 
 -- Misc (Named Instruction)
 
 fOps :: (AST.FastMathFlags -> AST.Operand -> AST.Operand -> AST.InstructionMetadata -> AST.Instruction)
-     -> AST.Operand -> AST.Operand -> StateWithErr MetaData AST.Operand
+     -> AST.Operand -> AST.Operand -> StateWithErr MetaData NInstrsOperand
 fOps constr a b = do
   name <- unName
-  St.modify $ \meta -> meta { namedInstrs = namedInstrs meta ++
-                              [name := constr AST.noFastMathFlags a b []] }
-  pure $ AST.LocalReference double name
+  pure defNIO { mayOperand  = Just $ AST.LocalReference double name
+              , namedInstrs = [name := constr AST.noFastMathFlags a b []] }
 
 
 
@@ -270,8 +321,10 @@ fOps constr a b = do
 termRet :: Maybe AST.Operand -> StateWithErr MetaData (Named AST.Terminator)
 termRet retOperand = pure . AST.Do $ AST.Ret retOperand []
 
+
 termBr :: AST.Name -> StateWithErr MetaData (Named AST.Terminator)
 termBr dest = pure . AST.Do $ AST.Br dest []
+
 
 termCondbr :: AST.Operand -> AST.Name -> AST.Name -> StateWithErr MetaData (Named AST.Terminator)
 termCondbr cond tr fl = pure . AST.Do $ AST.CondBr cond tr fl []
@@ -284,174 +337,5 @@ termCondbr cond tr fl = pure . AST.Do $ AST.CondBr cond tr fl []
 -- ConstantOperand Constant
 -- MetadataOperand Metadata
 
-
 doubleNum :: Double -> StateWithErr MetaData AST.Operand
 doubleNum num = pure . AST.ConstantOperand . Const.Float $ Float.Double num
-
-
-
-
-
-
-
-
-
-
-
-
--- define ::  AST.Type -> AST.Name -> [(AST.Type, AST.Name)] -> [AST.BasicBlock]
---        -> StateWithErr MetaData AST.Definition
--- define retT funcName typedArgs body = do
---   St.modify $ \meta -> meta { definitionTable = Map.insert funcName definition
---                                                 $ definitionTable meta }
---   pure definition
---   where
---     definition = AST.GlobalDefinition
---       G.functionDefaults { G.name        = funcName
---                          , G.parameters  = (genParam <$> typedArgs, False)
---                          , G.returnType  = retT
---                          , G.basicBlocks = body }
-
--- external ::  AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
---          -> StateWithErr MetaData AST.Definition
--- external retT funcName argtys = do
---   St.modify $ \meta -> meta { definitionTable = Map.insert funcName definition
---                                                 $ definitionTable meta }
---   pure definition
---   where
---     definition = AST.GlobalDefinition
---                  G.functionDefaults { G.name        = funcName
---                                     , G.parameters  = (genParam <$> argtys, False)
---                                     , G.returnType  = retT
---                                     , G.basicBlocks = [] }
-
-
--- -- Global
-
--- newGlobalFunc =
-
-
--- mangleName :: AST.Name -> Names -> (AST.Name, Names)
--- mangleName name names =
---   maybe
---   (name,  Map.insert name 1 names)
---   (\x -> (name <> nameShow x, Map.insert name (x + 1) names))
---   $ names !? name
-
--- newBlock :: AST.Name
---          -> [AST.Named AST.Instruction]
---          -> AST.Named AST.Terminator
---          -> StateWithErr MetaData AST.BasicBlock
--- newBlock blkName namedInstrs term = do
---   MetaData { names = names0 } <- St.get
---   let (mangledName, names1) = mangleName blkName names0
---   St.modify $ \s -> s { names = names1 }
---   pure $ AST.BasicBlock mangledName namedInstrs term
-
--- localRef :: AST.Name -> AST.Operand
--- localRef = AST.LocalReference Def.double
-
--- assign :: AST.Name -> AST.Operand -> StateWithErr MetaData ()
--- assign var operand =
---   St.modify $ \s -> s { symbolTable = Map.insert var operand $ symbolTable s }
-
--- getvar :: AST.Name -> StateWithErr MetaData AST.Operand
--- getvar var = do
---   MetaData { symbolTable = symbolTable } <- St.get
---   maybe (throwErr $ "Local variable not in scope: " <> tShow var) pure
---     $ symbolTable !? var
-
--- lessThan :: AST.Operand -> AST.Operand -> StateWithErr MetaData AST.Operand
--- lessThan a b = -- ui2fp double =<<
---   fCmp FP.ULT a b
-
--- fCmp :: FP.FloatingPointPredicate -> AST.Operand -> AST.Operand -> StateWithErr MetaData AST.Operand
--- fCmp cond a b = appendNamedInstr $ AST.FCmp cond a b []
-
--- ui2fp :: AST.Type -> AST.Operand -> StateWithErr MetaData AST.Operand
--- ui2fp type' a = appendNamedInstr $ AST.UIToFP a type' []
-
--- appendNamedInstr :: AST.Instruction -> StateWithErr MetaData AST.Operand
--- appendNamedInstr instr = do
---   MetaData { instrCount = instrCount } <- St.get
---   let refrence = AST.UnName $ instrCount + 1
---   St.modify $ \meta -> meta { namedInstrs = namedInstrs meta ++ [refrence := instr]
---                             , instrCount = instrCount + 1 }
---   pure $ localRef refrence
-
--- expr2module :: Expr -> StateWithErr MetaData AST.Definition
--- expr2module (FuncDef name args body) =
---   E.either throwErr
---   (\blocks -> define double name (toSig args) [blocks]) eitherBlocks
---   where
---     eitherBlocks = evalMetaData $ do
---       (\arg -> do
---           var <- alloca Def.double
---           store var (localRef arg)
---           assign arg var) `mapM_` args
---       genTerm <- expr2operand body
---       MetaData { namedInstrs = namedInstrs } <- St.get
---       newBlock name namedInstrs (termRet (Just genTerm))
-
--- expr2module (Extern name args) = external Def.double name (toSig args)
-
--- expr2module expr =
---   E.either throwErr
---   (\blocks -> define Def.double "main" [] [blocks]) eitherBlocks
---     where
---       eitherBlocks = evalMetaData $ do
---         genTerm <- expr2operand expr
---         MetaData { namedInstrs = namedInstrs } <- St.get
---         newBlock (genName "main") namedInstrs (termRet (Just genTerm))
-
--- toSig :: [AST.Name] -> [(AST.Type, AST.Name)]
--- toSig = map ((,) Def.double)
-
--- defsgenTop :: [Expr] -> StateWithErr MetaData [AST.Definition]
--- defsgenTop (expr:exprs) = do
---   def  <- expr2module expr
---   defs <- defsgenTop exprs
---   pure $ def:defs
--- defsgenTop [] = pure []
-
-
--- expr2operand :: Expr -> StateWithErr MetaData AST.Operand
--- expr2operand (Float float) = pure . AST.ConstantOperand . Const.Float . Float.Double $ float
-
--- expr2operand (Var x) = getvar x >>= load
-
--- expr2operand (BinOp op leftArg rightArg) =
---   May.maybe (throwErr $ "No such operator" <> tShow op)
---   (\operand -> M.join $ operand <$> expr2operand leftArg <*> expr2operand rightArg)
---   $ binops !? op
-
--- expr2operand (FuncCall fn args) = do
---   MetaData { definitionTable = definitionTable } <- St.get
---   May.maybe noFunc
---     (\definition -> do { operand <- externf definition
---                        ; args    <- mapM expr2operand args
---                        ; call operand args })
---     $ definitionTable !? fn
---     where
---       noFunc = throwErr $ "No such function: " <> tShow fn
-
-
--- externf :: AST.Definition -> StateWithErr MetaData AST.Operand
--- externf (AST.GlobalDefinition AST.Function {name = name, returnType = retT, parameters = parameters}) =
---   pure . AST.ConstantOperand . Const.GlobalReference
---   AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
---                   , pointerReferent  = AST.FunctionType
---                                        { resultType    = retT
---                                        , argumentTypes = argTs
---                                        , isVarArg = False } }
---   $ name
---   where
---     argTs = (\(G.Parameter argT _ _) -> argT) <$> fst parameters
--- externf notFunc = throwErr $ tShow notFunc <> " is not function"
-
--- binops = Map.fromList [ (Plus, fAdd)
---                       , (Minus, fSub)
---                       , (Times, fMul)
---                       , (Divide, fDiv)
---                       , (LsT, lessThan)
---                       ]

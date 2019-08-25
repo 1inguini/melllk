@@ -54,8 +54,8 @@ runJIT module_ = Context.withContext
   LLVM.withModuleFromAST context module_ $ \module_ ->
     PassMng.withPassManager passes $ \passManager -> do
     Analysis.verify module_
-    _ <- PassMng.runPassManager passManager module_
-    optimizedModule <- LLVM.moduleAST module_
+    -- _ <- PassMng.runPassManager passManager module_
+    -- optimizedModule <- LLVM.moduleAST module_
     LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
     ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do
       mainfn <- ExecEngine.getFunction ee (AST.Name "main")
@@ -64,7 +64,7 @@ runJIT module_ = Context.withContext
           res <- run fn
           putStrLn $ ">>> Evaluated to: " ++ show res
         Nothing -> return ())
-  `Exception.catch` (\(Exception.EncodeException err) -> do
+  `Exception.catch` (\(Exception.EncodeException err) ->
                        T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err)
 
 
@@ -79,7 +79,7 @@ jit context = ExecEngine.withMCJIT context optlevel model ptrElim fastInstr
     ptrElim    = Nothing -- frame pointer elimination
     fastInstr  = Nothing -- fast instruction selection
 
-foreign import ccall "dynamic" haskFun :: Ptr.FunPtr (IO Double) -> (IO Double)
+foreign import ccall "dynamic" haskFun :: Ptr.FunPtr (IO Double) -> IO Double
 
 run :: Ptr.FunPtr a -> IO Double
 run fn = haskFun (Ptr.castFunPtr fn :: Ptr.FunPtr (IO Double))

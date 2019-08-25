@@ -13,7 +13,9 @@ import qualified Data.Void             as Void
 
 import qualified Text.Megaparsec       as MP
 
+import           LLVM.AST              (Named ((:=)))
 import qualified LLVM.AST              as AST
+import qualified LLVM.AST.Type         as Type
 
 -- for Parser
 
@@ -51,13 +53,17 @@ type DefinitionTable = Map.Map AST.Name AST.Operand
 
 type Names = Map.Map AST.Name Integer
 
-type NamedInstrs = [AST.Named AST.Instruction]
+data NInstrsOperand =
+  NIO { mayOperand  :: Maybe AST.Operand
+      , namedInstrs :: [AST.Named AST.Instruction] }
+
+defNIO :: NInstrsOperand
+defNIO = NIO { mayOperand  = Nothing
+             , namedInstrs = []}
 
 data MetaData
   = MetaData
-  { namedInstrs     :: NamedInstrs
-    -- Instructions for BasicBlocks
-  , symbolTable     :: SymbolTable
+  { symbolTable     :: SymbolTable
     -- Function scope symbol table
   , definitionTable :: DefinitionTable
     -- Global scope symbol table
@@ -78,8 +84,9 @@ runMetaData m = St.runStateT m emptyMetaData
 
 emptyMetaData :: MetaData
 emptyMetaData = MetaData
-  { namedInstrs     = []
-  , symbolTable     = Map.empty
+  { -- namedInstrs     = []
+  -- ,
+    symbolTable     = Map.empty
   , definitionTable = Map.empty
   , unusedNum       = 0
   , names           = Map.empty}
