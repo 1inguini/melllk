@@ -13,6 +13,7 @@ import qualified Control.Monad.State       as St
 import qualified Control.Monad.Trans       as Trans
 import qualified Data.ByteString.Char8     as BStr
 import qualified Data.Either               as E
+import qualified Data.Maybe                as May
 import qualified Data.String               as Str
 import qualified Data.Text                 as T
 import qualified Data.Text.IO              as T.IO
@@ -62,23 +63,61 @@ import qualified LLVM.IRBuilder            as IR
 --         Trans.liftIO $ BStr.putStrLn code
 --         loop
 
-main :: IO ()
-main = Hline.runInputT Hline.defaultSettings loop
+-- main :: IO ()
+-- main = Hline.runInputT Hline.defaultSettings loop
+--   where
+--   loop = do
+--     minput <- Hline.getInputLine "ready >> "
+--     case minput of
+--       Nothing    -> Hline.outputStrLn "Goodbye."
+--       Just input -> do
+--         Trans.liftIO $ eval $ T.pack input
+--         loop
+
+-- eval :: T.Text -> IO ()
+-- eval input =
+--   either (putStrLn . MP.E.errorBundlePretty)
+--   (E.either print JIT.runJIT . evalMetaData . Gen.toplevels2module)
+--   $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
+
+initModule :: AST.Module
+initModule = AST.defaultModule { AST.moduleName = "my cool jit" }
+
+process :: (AST.Module, MetaData) -> T.Text -> IO (Maybe  AST.Module, MetaData)
+process (module_, meta) source = do
+  let res = MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" source
+  case res of
+    Left err -> (putStrLn . MP.E.errorBundlePretty) err >> pure (Nothing, meta)
+    Right tops ->
+      E.either (\err -> print err >> pure (Nothing, meta))
+      (\(module_, meta) -> do { module_ <- JIT.runJIT module_
+                              ; pure (module_, meta)})
+      (runMetaData $ Gen.toplevels2module (module_, meta) tops)
+      -- E.either (const $ pure Nothing) (pure . Just)
+      -- (evalMetaData $ Gen.toplevels2module modo tops)
+
+-- processFile :: String -> IO (Maybe AST.Module)
+-- processFile fname = readFile fname >>= process initModule
+
+repl :: IO ()
+repl = Hline.runInputT Hline.defaultSettings (loop (initModule, emptyMetaData))
   where
-  loop = do
-    minput <- Hline.getInputLine "ready >> "
+  loop (module_, meta) = do
+    minput <- Hline.getInputLine "ready>> "
     case minput of
-      Nothing    -> Hline.outputStrLn "Goodbye."
+      Nothing -> Hline.outputStrLn "Goodbye."
       Just input -> do
-        Trans.liftIO $ eval $ T.pack input
-        loop
+        mayModuleMeta <- Trans.liftIO $ process (module_, meta) $ T.pack input
+        case mayModuleMeta of
+          (Just newModule, meta) -> loop (newModule, meta)
+          (Nothing, meta)        -> loop (module_, meta)
 
-eval :: T.Text -> IO ()
-eval input =
-  either (putStrLn . MP.E.errorBundlePretty)
-  (E.either print JIT.runJIT . evalMetaData . Gen.toplevels2module)
-  $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" input
-
+main :: IO ()
+main = do
+  args <- Env.getArgs
+  case args of
+    []      -> repl
+    -- [fname] -> processFile fname >> return ()
 
 -- int :: AST.Type
 -- int = AST.IntegerType 32

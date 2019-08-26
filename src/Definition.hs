@@ -69,8 +69,8 @@ data MetaData
     -- Global scope symbol table
   , unusedNum       :: Word
     -- Count of unnamed instructions
-  , names           :: Names
-    -- Name Supply
+  -- , names           :: Names
+  --   -- Name Supply
   } deriving Show
 
 execMetaData :: StateWithErr MetaData a -> Either T.Text MetaData
@@ -89,7 +89,8 @@ emptyMetaData = MetaData
     symbolTable     = Map.empty
   , definitionTable = Map.empty
   , unusedNum       = 0
-  , names           = Map.empty}
+  -- , names           = Map.empty
+  }
 
 entryBlockName :: AST.Name
 entryBlockName = genName "entry"

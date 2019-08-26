@@ -47,15 +47,15 @@ genLLVM module' = Context.withContext $ \context ->
 --   var <- alloca type' unName
 --   store var 0 valOp
 
-mangle :: AST.Name -> StateWithErr MetaData AST.Name
-mangle name = do
-  MetaData { names = names } <- St.get
-  maybe
-    (do { St.modify $ \meta -> meta { names = Map.insert name 1 names }
-        ; pure name })
-    (\num -> do { St.modify $ \meta -> meta { names = Map.insert name (num + 1) names }
-                ; pure $ name <> nameShow num })
-    $ names !? name
+-- mangle :: AST.Name -> StateWithErr MetaData AST.Name
+-- mangle name = do
+--   MetaData { names = names } <- St.get
+--   maybe
+--     (do { St.modify $ \meta -> meta { names = Map.insert name 1 names }
+--         ; pure name })
+--     (\num -> do { St.modify $ \meta -> meta { names = Map.insert name (num + 1) names }
+--                 ; pure $ name <> nameShow num })
+--     $ names !? name
 
 unName :: StateWithErr MetaData AST.Name
 unName = do
@@ -77,10 +77,20 @@ mayThrowErr msg Nothing = throwErr msg
 
 -- Toplevels to Module
 
-toplevels2module :: [Toplevel] -> StateWithErr MetaData AST.Module
-toplevels2module exprs = do
+toplevels2module :: (AST.Module, MetaData) -> [Toplevel]
+                 -> StateWithErr MetaData AST.Module
+toplevels2module (module_, meta) exprs = do
+  St.put meta
   maybeDefs <- toplevel2def `mapM` exprs
-  pure AST.defaultModule { AST.moduleDefinitions = fromMaybeList [] maybeDefs }
+  pure module_ { AST.moduleDefinitions = mainlessDefs
+                                         ++ fromMaybeList [] maybeDefs }
+    where
+      oldDefs      = AST.moduleDefinitions module_
+      mainlessDefs = filter (not . isMainFunc) oldDefs
+
+isMainFunc :: AST.Definition -> Bool
+isMainFunc (AST.GlobalDefinition AST.Function { name = name }) = name == "main"
+isMainFunc _ = False
 
 fromMaybeList :: [a] -> [Maybe a] -> [a]
 fromMaybeList accm (Just a:listMay)  = a:fromMaybeList accm listMay
@@ -102,21 +112,27 @@ toplevel2def top = do
 
 toplevel2Global :: Toplevel -> StateWithErr MetaData (Maybe AST.Global)
 toplevel2Global (FuncDef name argNames bodyExpr) = do
-  name <- mangle name
-  MetaData { symbolTable = oldSymbolTable
-           -- , names       = oldNames
+  MetaData { definitionTable = definitionTable
            } <- St.get
-  -- St.modify $ \meta -> meta { names     = Map.empty
-  --                           , unusedNum = 0 }
-  argNInstrs <- concatMap namedInstrs <$> assign Type.double `mapM` argNames
-  nios       <- expr2nio bodyExpr
-  term       <- termRet $ mayOperand nios
-  blkname    <- mangle (AST.Name "entry")
-  body       <- newBasicBlock blkname (argNInstrs ++ namedInstrs nios) term
-  St.modify $ \meta -> meta { symbolTable = oldSymbolTable
-                            -- , names       = oldNames
-                            }
-  defineFunc double name ((,) double <$> argNames) [body]
+  May.maybe funcDef (const . throwErr $ "duplicated definition: " <> tShow name)
+    $ definitionTable !? name
+  where
+    funcDef = do
+      -- name <- mangle name
+      MetaData { symbolTable = oldSymbolTable
+           -- , names       = oldNames
+               } <- St.get
+      -- St.modify $ \meta -> meta { names     = Map.empty
+      --                           , unusedNum = 0 }
+      argNInstrs <- concatMap namedInstrs <$> assign Type.double `mapM` argNames
+      nios       <- expr2nio bodyExpr
+      term       <- termRet $ mayOperand nios
+        -- blkname    <- mangle (AST.Name "entry")
+      body       <- newBasicBlock (AST.Name "entry") (argNInstrs ++ namedInstrs nios) term
+      St.modify $ \meta -> meta { symbolTable = oldSymbolTable
+                                -- , names       = oldNames
+                                }
+      defineFunc double name ((,) double <$> argNames) [body]
 
 
 toplevel2Global (Extern name argNames) =
@@ -128,8 +144,8 @@ toplevel2Global (Expr expr) = do
            } <- St.get
   nios       <- expr2nio expr
   term       <- termRet $ mayOperand nios
-  blkname    <- mangle (AST.Name "entry")
-  body       <- newBasicBlock blkname (namedInstrs nios) term
+  -- blkname    <- mangle (AST.Name "entry")
+  body       <- newBasicBlock (AST.Name "entry") (namedInstrs nios) term
   St.modify $ \meta -> meta { symbolTable = oldSymbolTable
                             -- , names       = oldNames
                             }

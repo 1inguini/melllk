@@ -47,15 +47,15 @@ import qualified LLVM.ExecutionEngine            as ExecEngine
 import qualified LLVM.PassManager                as PassMng
 import qualified LLVM.Target                     as Target
 
-runJIT :: AST.Module -> IO ()
+runJIT :: AST.Module -> IO (Maybe AST.Module)
 runJIT module_ = Context.withContext
   (\context -> jit context $ \executionEngine -> do
   Target.initializeAllTargets
   LLVM.withModuleFromAST context module_ $ \module_ ->
     PassMng.withPassManager passes $ \passManager -> do
     Analysis.verify module_
-    -- _ <- PassMng.runPassManager passManager module_
-    -- optimizedModule <- LLVM.moduleAST module_
+    _ <- PassMng.runPassManager passManager module_
+    optimizedModule <- LLVM.moduleAST module_
     LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
     ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do
       mainfn <- ExecEngine.getFunction ee (AST.Name "main")
@@ -63,9 +63,11 @@ runJIT module_ = Context.withContext
         Just fn -> do
           res <- run fn
           putStrLn $ ">>> Evaluated to: " ++ show res
-        Nothing -> return ())
-  `Exception.catch` (\(Exception.EncodeException err) ->
-                       T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err)
+        Nothing -> pure ()
+    pure $ Just optimizedModule)
+  `Exception.catch` (\(Exception.EncodeException err) -> do
+                       T.IO.putStrLn . T.Lazy.toStrict . PrettyS.pString $ err
+                       pure Nothing)
 
 
 passes :: PassMng.PassSetSpec
