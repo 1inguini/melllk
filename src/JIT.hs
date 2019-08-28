@@ -54,7 +54,7 @@ runJIT module_ = Context.withContext
   LLVM.withModuleFromAST context module_ $ \module_ ->
     PassMng.withPassManager passes $ \passManager -> do
     Analysis.verify module_
-    _ <- PassMng.runPassManager passManager module_
+    -- _ <- PassMng.runPassManager passManager module_
     optimizedModule <- LLVM.moduleAST module_
     LLVM.moduleLLVMAssembly module_ >>= BStr.putStrLn
     ExecEngine.withModuleInEngine executionEngine module_ $ \ee -> do

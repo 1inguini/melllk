@@ -23,8 +23,8 @@ import qualified LLVM.AST                   as AST
 spaceConsumer :: Parser ()
 spaceConsumer = MP.L.space
                 MP.Ch.space1
-                (MP.L.skipLineComment "//")
-                (MP.L.skipBlockComment "/*" "*/")
+                (MP.L.skipLineComment "#")
+                MP.empty
 
 symbol :: T.Text -> Parser T.Text
 symbol = MP.try . MP.L.symbol spaceConsumer
@@ -56,7 +56,7 @@ identifier = lexeme $
   <$> MP.Ch.letterChar
   <*> MP.many MP.Ch.alphaNumChar >>= check
   where
-    check x = if x `elem` ((Str.fromString . T.unpack) <$> reserved)
+    check x = if x `elem` (Str.fromString . T.unpack <$> reserved)
               then fail $ "keyword " <> show x <> " cannot be an identifier"
               else pure x
 
@@ -88,8 +88,23 @@ pFuncCall = MP.try $ FuncCall
 
 pTopExpr = Expr <$> pExpr
 
-pFuncCall, pVar, pExpr, pAdd, pMul, pFloat, pInteger :: Parser Expr
-pExpr = pAdd
+pExpr, pIf, pFuncCall, pVar, pRelational, pAdd, pMul, pFloat, pInteger :: Parser Expr
+pExpr = MP.choice [ pIf
+                  , pRelational ]
+
+pIf = If
+  <$> (symbol "if" *> pExpr)
+  <*> (symbol "then" *> pExpr)
+  <*> (symbol "else" *> pExpr)
+
+pRelational = do
+  fstArg <- pAdd
+  argAndOps <- MP.many $ MP.try $
+               (\op rightArg pointFreeLeftArg -> BinOp op pointFreeLeftArg rightArg)
+               <$> MP.choice [ LsT  <$ symbol "<" ]
+               <*> pAdd
+  pure $ foldr (flip (.)) id argAndOps fstArg
+
 
 pAdd = do
   fstArg <- pMul

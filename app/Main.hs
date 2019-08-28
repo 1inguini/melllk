@@ -9,6 +9,7 @@ import qualified JIT
 import qualified LLVMGen                   as Gen
 import qualified Parse
 
+import qualified Control.Monad             as M
 import qualified Control.Monad.State       as St
 import qualified Control.Monad.Trans       as Trans
 import qualified Data.ByteString.Char8     as BStr
@@ -96,8 +97,8 @@ process (module_, meta) source = do
       -- E.either (const $ pure Nothing) (pure . Just)
       -- (evalMetaData $ Gen.toplevels2module modo tops)
 
--- processFile :: String -> IO (Maybe AST.Module)
--- processFile fname = readFile fname >>= process initModule
+processFile :: String -> IO (Maybe AST.Module, MetaData)
+processFile fname = T.IO.readFile fname >>= process (initModule, emptyMetaData)
 
 repl :: IO ()
 repl = Hline.runInputT Hline.defaultSettings (loop (initModule, emptyMetaData))
@@ -112,12 +113,29 @@ repl = Hline.runInputT Hline.defaultSettings (loop (initModule, emptyMetaData))
           (Just newModule, meta) -> loop (newModule, meta)
           (Nothing, meta)        -> loop (module_, meta)
 
+rppl :: IO ()
+rppl = Hline.runInputT Hline.defaultSettings loop
+  where
+  loop = do
+    minput <- Hline.getInputLine "ready>> "
+    case minput of
+      Nothing -> Hline.outputStrLn "Goodbye."
+      Just input -> do
+        E.either
+          (Trans.lift . putStrLn . MP.E.errorBundlePretty)
+          (Trans.lift . PrettyS.pPrint)
+          $ MP.parse (Parse.pToplevel <* MP.eof) "<stdin>" (T.pack input)
+        loop
+
+
+
 main :: IO ()
 main = do
   args <- Env.getArgs
   case args of
-    []      -> repl
-    -- [fname] -> processFile fname >> return ()
+    []     -> repl
+    -- []     -> rppl
+    fnames -> processFile `mapM_` fnames
 
 -- int :: AST.Type
 -- int = AST.IntegerType 32

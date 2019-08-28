@@ -26,11 +26,13 @@ type SByteStr = BStr.S.ShortByteString
 data Toplevel = FuncDef  AST.Name [AST.Name] Expr
               | Extern   AST.Name [AST.Name]
               | Expr     Expr
+              deriving (Eq, Ord, Show)
 
 data Expr
   = Float    Double
-  | BinOp    Op       Expr   Expr
+  | BinOp    Op Expr Expr
   | Var      AST.Name
+  | If       Expr Expr Expr
   | FuncCall AST.Name [Expr]
   deriving (Eq, Ord, Show)
 
@@ -42,7 +44,7 @@ data Op = Plus
         deriving (Eq, Ord, Show)
 
 reserved :: [T.Text]
-reserved = [ "def", "extern" ]
+reserved = [ "def", "extern", "if", "then", "else" ]
 
 
 -- for LLVMGen
@@ -53,13 +55,22 @@ type DefinitionTable = Map.Map AST.Name AST.Operand
 
 type Names = Map.Map AST.Name Integer
 
-data NInstrsOperand =
-  NIO { mayOperand  :: Maybe AST.Operand
-      , namedInstrs :: [AST.Named AST.Instruction] }
+data BBlkContent = BlkName   AST.Name
+                 | NInstr  (AST.Named AST.Instruction)
+                 | NTerm (AST.Named AST.Terminator)
+                 deriving (Show, Eq)
 
-defNIO :: NInstrsOperand
-defNIO = NIO { mayOperand  = Nothing
-             , namedInstrs = []}
+type BBlkContents = [BBlkContent]
+
+data OpNameds =
+  OpNameds
+  { mayOperand :: Maybe AST.Operand
+  , nameds     :: BBlkContents
+  } deriving (Eq, Show)
+
+defOpNs :: OpNameds
+defOpNs = OpNameds { mayOperand  = Nothing
+                   , nameds = [] }
 
 data MetaData
   = MetaData
@@ -69,9 +80,9 @@ data MetaData
     -- Global scope symbol table
   , unusedNum       :: Word
     -- Count of unnamed instructions
-  -- , names           :: Names
-  --   -- Name Supply
-  } deriving Show
+  , names           :: Names
+    -- Name Supply
+  } deriving (Eq, Show)
 
 execMetaData :: StateWithErr MetaData a -> Either T.Text MetaData
 execMetaData m = St.execStateT m emptyMetaData
@@ -89,7 +100,7 @@ emptyMetaData = MetaData
     symbolTable     = Map.empty
   , definitionTable = Map.empty
   , unusedNum       = 0
-  -- , names           = Map.empty
+  , names           = Map.empty
   }
 
 entryBlockName :: AST.Name
