@@ -74,13 +74,13 @@ defOpNs = OpNameds { mayOperand  = Nothing
 
 data MetaData
   = MetaData
-  { symbolTable     :: SymbolTable
+  { symbolTable :: SymbolTable
     -- Function scope symbol table
-  , definitionTable :: DefinitionTable
-    -- Global scope symbol table
-  , unusedNum       :: Word
+  -- , definitionTable :: DefinitionTable
+  --   -- Global scope symbol table
+  , unusedNum   :: Word
     -- Count of unnamed instructions
-  , names           :: Names
+  , names       :: Names
     -- Name Supply
   } deriving (Eq, Show)
 
@@ -98,7 +98,7 @@ emptyMetaData = MetaData
   { -- namedInstrs     = []
   -- ,
     symbolTable     = Map.empty
-  , definitionTable = Map.empty
+  -- , definitionTable = Map.empty
   , unusedNum       = 0
   , names           = Map.empty
   }
@@ -117,6 +117,10 @@ type StateWithErr a b = St.StateT a (Either T.Text) b
 
 throwErr :: T.Text -> StateWithErr a b
 throwErr = St.lift . Left
+
+mayThrowErr :: T.Text -> Maybe a -> StateWithErr MetaData a
+mayThrowErr _ (Just a)  = pure a
+mayThrowErr msg Nothing = throwErr msg
 
 basicBlockName :: AST.BasicBlock -> AST.Name
 basicBlockName (AST.BasicBlock name _ _) = name

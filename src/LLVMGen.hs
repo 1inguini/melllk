@@ -46,6 +46,9 @@ genLLVM module' = Context.withContext $ \context ->
 --   store var 0 valOp
 
 
+zero :: AST.Operand
+zero = AST.ConstantOperand .  Const.Float . Float.Double $ 0
+
 mangle :: AST.Name -> StateWithErr MetaData AST.Name
 mangle name = do
   MetaData { names = names } <- St.get
@@ -68,11 +71,6 @@ ptrTo type' = AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
                               , pointerReferent  = type' }
 
 
-mayThrowErr :: T.Text -> Maybe a -> StateWithErr MetaData a
-mayThrowErr _ (Just a)  = pure a
-mayThrowErr msg Nothing = throwErr msg
-
-
 
 -- Toplevels to Module
 
@@ -82,7 +80,7 @@ toplevels2module (module_, meta) tops = do
   St.put meta
   maybeDefs <- toplevel2def `mapM` tops
   pure module_ { AST.moduleDefinitions = mainlessDefs
-                                         ++ fromMaybeList [] maybeDefs }
+                                         ++ May.catMaybes maybeDefs }
     where
       oldDefs      = AST.moduleDefinitions module_
       mainlessDefs = filter (not . isMainFunc) oldDefs
@@ -90,11 +88,6 @@ toplevels2module (module_, meta) tops = do
 isMainFunc :: AST.Definition -> Bool
 isMainFunc (AST.GlobalDefinition AST.Function { name = name }) = name == "main"
 isMainFunc _ = False
-
-fromMaybeList :: [a] -> [Maybe a] -> [a]
-fromMaybeList accm (Just a:listMay)  = a:fromMaybeList accm listMay
-fromMaybeList accm (Nothing:listMay) = fromMaybeList accm listMay
-fromMaybeList accm []                = accm
 
 
 
@@ -111,32 +104,24 @@ toplevel2def top = do
 
 toplevel2Global :: Toplevel -> StateWithErr MetaData (Maybe AST.Global)
 toplevel2Global (FuncDef name argNames bodyExpr) = do
-  MetaData { definitionTable = definitionTable
+  MetaData { symbolTable = oldSymbolTable
            } <- St.get
-  May.maybe funcDef (const . throwErr $ "duplicated definition: " <> tShow name)
-    $ definitionTable !? name
+  argNameds  <- concat . (nameds <$>) <$> assign Type.double `mapM` argNames
+  OpNameds { mayOperand = mayOperand
+           , nameds     = nameds
+           } <- expr2opNm bodyExpr
+  St.modify $ \meta -> meta { symbolTable = oldSymbolTable }
+  let body = bblkConts2BBlock $
+             argNameds
+             ++ nameds
+             ++ [NTerm $ termRet mayOperand]
+  pure $ defineFunc double name typedArgs body
   where
-    funcDef = do
-      MetaData { symbolTable = oldSymbolTable
-               } <- St.get
-      argNameds  <- concat . (nameds <$>) <$> assign Type.double `mapM` argNames
-      OpNameds { mayOperand = mayOperand
-               , nameds     = nameds
-               } <- expr2opNm bodyExpr
-      St.modify $ \meta -> meta { symbolTable = oldSymbolTable }
-      let body = bblkConts2BBlock $
-                 argNameds
-                 ++ nameds
-                 ++ [NTerm $ termRet mayOperand]
-      defineFunc double name ((,) double <$> argNames) body
+    typedArgs = (,) double <$> argNames
 
-toplevel2Global (Extern name argNames) = do
-  MetaData { definitionTable = definitionTable
-           } <- St.get
-  May.maybe
-    (externFunc double name ((,) double <$> argNames))
-    (const . throwErr $ "duplicated definition: " <> tShow name)
-    $ definitionTable !? name
+toplevel2Global (Extern name argNames) = pure $ externFunc double name typedArgs
+    where
+      typedArgs = (,) double <$> argNames
 
 toplevel2Global (Expr expr) = do
   MetaData { symbolTable = oldSymbolTable
@@ -149,7 +134,7 @@ toplevel2Global (Expr expr) = do
   St.modify $ \meta -> meta { symbolTable = oldSymbolTable
                             , names       = oldNames
                             }
-  defineFunc double (AST.Name "main") [] body
+  pure $ defineFunc double (AST.Name "main") [] body
 
 -- Operand and Basicblocks to Basicblock
 
@@ -164,8 +149,8 @@ bblkConts2BBlock = internal (AST.Name "entry") [] []
       internal blkName (accmBlks ++ [AST.BasicBlock blkName accmInstrs namedTerm]) [] nameds
     internal _ accmBlks [] [] =
       accmBlks
-    -- internal blkName accmBlks accmInstrs [] =
-    --   accmBlks ++ [AST.BasicBlock blkName accmInstrs (termRet Nothing)]
+    internal blkName accmBlks accmInstrs [] =
+      accmBlks ++ [AST.BasicBlock blkName accmInstrs (termRet Nothing)]
 
 
   -- term <- termRet $ Safe.lastDef Nothing (mayOperand <$> opNms)
@@ -222,25 +207,19 @@ expr2opNm (BinOp op expr0 expr1) = do
                    ; Minus  -> fSub
                    ; Times  -> fMul
                    ; Divide -> fDiv
-                   ; LsT    -> undefined) operand0 operand1
+                   ; LsT    -> fCmp FP.OLT) operand0 operand1
   pure defOpNs { mayOperand  = resultOperand
                , nameds = nameds0 ++
                           nameds1 ++
                           resultNInstrs }
 
-expr2opNm (FuncCall name exprs) = do
-  opNms <- expr2opNm `mapM` exprs
-  argOps <- mayThrowErr ("failed at: " <> tShow exprs) `mapM` (mayOperand <$> opNms)
-  MetaData
-    { definitionTable = definitionTable
-    } <- St.get
+expr2opNm (FuncCall name args) = do
+  opNms <- expr2opNm `mapM` args
+  argOps <- mayThrowErr ("failed at: " <> tShow args) `mapM` (mayOperand <$> opNms)
   OpNameds
     { mayOperand  = retMayOp
     , nameds      = retNameds
-    } <- May.maybe
-         (throwErr $ "function not defined: " <> tShow name)
-         (flip (call Type.double) argOps)
-         $ definitionTable !? name
+    } <- call Type.double (genFunTypePtr double name (double <$ argOps)) argOps
   pure defOpNs { mayOperand = retMayOp
                , nameds     = concat (nameds <$> opNms) ++
                               retNameds }
@@ -251,6 +230,7 @@ expr2opNm (If condExpr thenExpr elseExpr) = do
       ifThen = AST.Name "if.then" <> labelNum
       ifElse = AST.Name "if.else" <> labelNum
       ifExit = AST.Name "if.exit" <> labelNum
+
   OpNameds
     { mayOperand  = mayCondOp
     , nameds      = condNameds
@@ -259,7 +239,7 @@ expr2opNm (If condExpr thenExpr elseExpr) = do
   OpNameds
     { mayOperand  = mayIsTrueOp
     , nameds      = isTrueNameds
-    }      <- fCmp FP.ONE zero condOp
+    }      <- cmp FP.ONE zero condOp
   isTrueOp <- mayThrowErr ("failed comparing:" <> tShow isTrueNameds) mayIsTrueOp
   let
     ifCondNameds = BlkName ifCond:condNameds
@@ -281,6 +261,7 @@ expr2opNm (If condExpr thenExpr elseExpr) = do
   elseOp   <- mayThrowErr ("no result: " <> tShow thenNameds) mayElseOp
   let
     ifElseNameds = BlkName ifElse:elseNameds ++ [NTerm $ termBr ifExit]
+
   pure defOpNs { mayOperand = Just $ AST.LocalReference double labelNum
                , nameds = ifCondNameds ++
                           ifThenNameds ++
@@ -290,16 +271,6 @@ expr2opNm (If condExpr thenExpr elseExpr) = do
                             AST.Phi Type.double [(thenOp, ifThen), (elseOp, ifElse)] []]}
 
 
--- opNms2BBlock :: AST.Name -> [OpNameds] -> StateWithErr MetaData [AST.BasicBlock]
--- opNms2BBlock name opNms = do
---   term <- termRet $ Safe.lastDef Nothing (mayOperand <$> opNms)
---   -- name <- mangle name
---   bblk <- newBasicBlock name (concat $ nameds <$> opNms) term
---   pure $ concat (basicBlocks <$> opNms) ++ [bblk]
-
-
-
-zero = AST.ConstantOperand .  Const.Float . Float.Double $ 0
 
 
 
@@ -308,10 +279,9 @@ zero = AST.ConstantOperand .  Const.Float . Float.Double $ 0
 -- Global
 
 defineFunc :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)] -> [AST.BasicBlock]
-           -> StateWithErr MetaData (Maybe AST.Global)
-defineFunc type' name typedArgs basicBlocks = do
-  addToDefinitionTable type' name typedArgs
-  pure . Just $
+           -> Maybe AST.Global
+defineFunc type' name typedArgs basicBlocks =
+  Just $
     AST.functionDefaults { G.returnType  = type'
                          , G.name        = name
                          , G.parameters  = (genParam <$> typedArgs, False)
@@ -319,31 +289,27 @@ defineFunc type' name typedArgs basicBlocks = do
 
 
 externFunc :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
-           -> StateWithErr MetaData (Maybe AST.Global)
-externFunc type' name typedArgs = do
-  addToDefinitionTable type' name typedArgs
-  pure . Just $
+           -> Maybe AST.Global
+externFunc type' name typedArgs =
+  -- addToDefinitionTable type' name typedArgs
+  Just $
     AST.functionDefaults { G.linkage    = Linkage.External
                          , G.returnType = type'
                          , G.name       = name
                          , G.parameters = (genParam <$> typedArgs, False) }
 
 
-addToDefinitionTable :: AST.Type -> AST.Name -> [(AST.Type, AST.Name)]
-                     -> StateWithErr MetaData ()
-addToDefinitionTable type' name typedArgs =
-  St.modify $ \meta ->
-    meta { definitionTable =
-           Map.insert name
-           (AST.ConstantOperand $
-            Const.GlobalReference
-            AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
-                             , pointerReferent =
-                               AST.FunctionType { resultType    = type'
-                                                , argumentTypes = fst <$> typedArgs
-                                                , isVarArg      = False }}
-             name)
-           $ definitionTable meta}
+genFunTypePtr :: AST.Type -> AST.Name -> [AST.Type] -> AST.Operand
+genFunTypePtr type' name types =
+  AST.ConstantOperand $
+  Const.GlobalReference
+  AST.PointerType { pointerAddrSpace = AddrSpace.AddrSpace 0
+                  , pointerReferent =
+                      AST.FunctionType { resultType    = type'
+                                       , argumentTypes = types
+                                       , isVarArg      = False }}
+  name
+
 
 -- Misc (Global)
 
@@ -362,12 +328,34 @@ fMul = fOps AST.FMul
 fDiv = fOps AST.FDiv
 
 
-fCmp :: FP.FloatingPointPredicate -> AST.Operand -> AST.Operand
+cmp :: FP.FloatingPointPredicate -> AST.Operand -> AST.Operand
      -> StateWithErr MetaData OpNameds
-fCmp fp a b = do
+cmp fp a b = do
   name <- unName
   pure defOpNs { mayOperand  = Just $ AST.LocalReference double name
                 , nameds = [NInstr $ name := AST.FCmp fp a b []] }
+
+
+ui2fp :: AST.Type -> AST.Operand
+     -> StateWithErr MetaData OpNameds
+ui2fp type' b = do
+  name <- unName
+  pure defOpNs { mayOperand  = Just $ AST.LocalReference double name
+                , nameds = [NInstr $ name := AST.UIToFP b type' []] }
+
+
+fCmp fp a b = do
+  OpNameds
+    { mayOperand = mayOperand
+    , nameds     = nameds
+    } <- cmp fp a b
+  op  <- mayThrowErr "this won't be error" mayOperand
+  OpNameds
+    { mayOperand = ui2fpOp
+    , nameds     = ui2fpNameds
+    } <- ui2fp double op
+  pure defOpNs { mayOperand = ui2fpOp
+               , nameds = nameds ++ ui2fpNameds}
 
 
 call :: AST.Type -> AST.Operand -> [AST.Operand] -> StateWithErr MetaData OpNameds
